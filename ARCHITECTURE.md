@@ -1,13 +1,13 @@
-# 🏗️ Phantom-CLI 架构设计文档
+# 🏗️ Phantom-FS 架构设计文档
 
-> 版本: V12.1-Phantom (Go 系统级) | 更新: 2026-07
+> 版本: V12.1-Phantom | 更新: 2026-07
 
 ---
 
 ## 01. 核心架构原则
 
 ### 奥卡姆剃刀
-系统遵循极简主义，拒绝臃肿的框架依赖，完全榨干 Go 标准库的密码学能力。
+系统遵循极简主义，拒绝臃肿的框架依赖。Go 端榨干标准库密码学能力，JS 端仅调用 `window.crypto.subtle`。
 
 ### 三大物理边界（核心安全模型）
 
@@ -17,11 +17,11 @@
 │                                                             │
 │  ① Chunks（加密碎沙）                                        │
 │     → AES-256-GCM 加密后的二进制分片                          │
-│     → 存储于本地文件系统或远程存储，无 Manifest 则毫无意义      │
+│     → 存储于本地或远程，无 Manifest 则毫无意义                  │
 │                                                             │
 │  ② Manifest（藏宝图 .ptm）                                   │
 │     → 包含 Salt / BaseIV / Fingerprint / 文件名              │
-│     → 二进制 56-byte 固定头格式                              │
+│     → 二进制 60-byte 固定头格式                              │
 │     → 物理隔离：无 Manifest 则找不到碎片                       │
 │                                                             │
 │  ③ Password（唯一钥匙）                                      │
@@ -42,35 +42,51 @@
 
 ---
 
-## 02. 系统架构总览
+## 02. 双端架构总览
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Phantom-CLI                             │
-│                                                             │
-│  ┌──────────────┐                                           │
-│  │   CLI 入口    │  flag 解析 → 命令分发                      │
-│  │  (main.go)   │  encrypt / decrypt / verify / info        │
-│  └──────┬───────┘                                           │
-│         │                                                   │
-│  ┌──────▼───────┐    ┌──────────────────┐                   │
-│  │   Cipher     │    │    Manifest      │                   │
-│  │   (crypto)   │◄──►│    (.ptm)        │                   │
-│  │              │    │                  │                   │
-│  │ PBKDF2 600k  │    │ 56-byte header   │                   │
-│  │ AES-256-GCM  │    │ + filename       │                   │
-│  │ IV 推导      │    │ Export/Import    │                   │
-│  └──────┬───────┘    └──────────────────┘                   │
-│         │                                                   │
-│  ┌──────▼───────┐    ┌──────────────────┐                   │
-│  │    Pool      │    │    Store         │                   │
-│  │  (并发控制)   │    │  (存储适配层)    │                   │
-│  │              │    │                  │                   │
-│  │ 信号量 sem   │    │ MemoryProvider   │                   │
-│  │ 指数退避重试  │    │ LocalFileProvider│                   │
-│  │ context 取消  │    │ HTTPProvider     │                   │
-│  └──────────────┘    └──────────────────┘                   │
-└─────────────────────────────────────────────────────────────┘
+│                     Phantom-FS Ecosystem                      │
+├──────────────────────────┬──────────────────────────────────┤
+│  Phantom-CLI (Go)        │  Phantom-Web (JS)                │
+│  「重装步兵」             │  「幽灵锁孔」                     │
+│                          │                                  │
+│  生产 & 自动化            │  消费 & 无门槛触达                │
+│                          │                                  │
+│  ┌──────────────────┐   │  ┌──────────────────────────┐   │
+│  │  CLI 入口         │   │  │  UI Layer (app.js)       │   │
+│  │  (main.go)       │   │  │  - 文件选择 / 拖拽        │   │
+│  │  encrypt/decrypt │   │  │  - 扫码 / 邮箱            │   │
+│  │  verify/info     │   │  │  - 进度 / 设置            │   │
+│  └───────┬──────────┘   │  └───────────┬──────────────┘   │
+│          │              │              │                   │
+│  ┌───────▼──────────┐   │  ┌───────────▼──────────────┐   │
+│  │  Cipher Engine    │   │  │  Cipher Engine            │   │
+│  │  (Go crypto)      │   │  │  (Web Crypto API)        │   │
+│  │                   │   │  │                           │   │
+│  │  PBKDF2 600k      │   │  │  PBKDF2 600k              │   │
+│  │  AES-256-GCM      │   │  │  AES-256-GCM              │   │
+│  │  IV 推导          │   │  │  IV 推导                  │   │
+│  └───────┬──────────┘   │  └───────────┬──────────────┘   │
+│          │              │              │                   │
+│  ┌───────▼──────────┐   │  ┌───────────▼──────────────┐   │
+│  │  Manifest (.ptm)  │   │  │  Manifest (.ptm/JSON)    │   │
+│  │  60-byte header   │   │  │  60-byte header + QR    │   │
+│  └───────┬──────────┘   │  └───────────┬──────────────┘   │
+│          │              │              │                   │
+│  ┌───────▼──────────┐   │  ┌───────────▼──────────────┐   │
+│  │  Store Layer      │   │  │  Store Layer              │   │
+│  │  (Provider)       │   │  │  (IStorageProvider)       │   │
+│  │                   │   │  │                           │   │
+│  │  MemoryProvider   │   │  │  MemoryProvider           │   │
+│  │  LocalFileProvider│   │  │  HTTPProvider             │   │
+│  │  HTTPProvider     │   │  │  S3Provider               │   │
+│  └──────────────────┘   │  │  WebDAVProvider            │   │
+│                          │  │  FileSystemProvider(OPFS) │   │
+│                          │  │  LocalFileProvider        │   │
+│                          │  │  CredentialVault          │   │
+│                          │  └──────────────────────────┘   │
+└──────────────────────────┴──────────────────────────────────┘
 ```
 
 ---
@@ -94,14 +110,14 @@
 └─────────┬───────────┘
           ▼
 ┌─────────────────────┐
-│ ③ 分片 + 并发加密    │  ← goroutine pool (max 5)
+│ ③ 分片 + 并发加密    │  ← Pool (max 5)
 │   chunk_i → AES-GCM │  ← IV = baseIV XOR BigEndian(i)
 │   → 存储到 Provider  │  ← AAD = "chunk_{i}"
 └─────────┬───────────┘
           ▼
 ┌─────────────────────┐
 │ ④ 构建 Manifest     │
-│   导出 .ptm 二进制   │  ← 56-byte header + filename
+│   导出 .ptm 二进制   │  ← 60-byte header + filename
 └─────────────────────┘
 ```
 
@@ -122,7 +138,7 @@
 └─────────┬───────────┘
           ▼
 ┌─────────────────────┐
-│ ③ 并发获取 + 解密    │  ← goroutine pool
+│ ③ 并发获取 + 解密    │  ← Pool
 │   GetChunk(i)        │
 │   DecryptChunk()     │
 └─────────┬───────────┘
@@ -136,7 +152,7 @@
 
 ## 04. 包设计
 
-### `pkg/cipher` — 密码学核心
+### `cipher` — 密码学核心
 
 ```
 PhantomCipher
@@ -147,8 +163,6 @@ PhantomCipher
 ├── NewCipher(password, salt)          // 派生密钥
 ├── EncryptChunk(plaintext, index)     // AES-256-GCM
 ├── DecryptChunk(data, index)          // 解密 + AAD 验证
-├── EncryptFile(data, chunkSize)       // 全文件加密
-├── DecryptFile(chunks, totalSize)     // 全文件解密
 ├── Fingerprint()                      // 返回密钥指纹
 ├── VerifyPassword(password, salt, fp) // 快速校验
 ├── SetBaseIV(iv)                      // 设置基础 IV
@@ -156,41 +170,40 @@ PhantomCipher
 └── GenerateSalt() / GenerateBaseIV()  // 随机数生成
 ```
 
-### `pkg/manifest` — .ptm 二进制格式
+### `manifest` — .ptm 二进制格式
 
 ```
 Manifest
-├── Version, FileName, FileSize
+├── Version, FileName, FileSize (int64)
 ├── ChunkSize, TotalChunks
 ├── Salt [16]byte, BaseIV [12]byte, Fingerprint [16]byte
 │
-├── ExportBinary() → []byte    // 56-byte header + filename
+├── ExportBinary() → []byte    // 60-byte header + filename
 ├── ImportBinary([]byte)       // 反序列化
 ├── IsBinaryManifest([]byte)   // 启发式检测
 ├── Validate() error           // 字段校验
-└── EstimateSize()             // JSON vs 二进制体积对比
+└── EstimateSize()             // 体积估算
 ```
 
-**二进制布局 (56-byte 固定头)**:
+**二进制布局 (60-byte 固定头)**:
 
 ```
 Offset  Size  Field
-0       16    Salt
-16      12    BaseIV
-28      16    Fingerprint
-44      4     ChunkSize (LittleEndian uint32)
-48      4     TotalChunks (LittleEndian uint32)
-52      4     FileSize (LittleEndian uint32)
-56      N     FileName (UTF-8, 可变长)
+0       16    Salt                    (Big Endian)
+16      12    BaseIV                  (Big Endian)
+28      16    Fingerprint             (Big Endian)
+44      4     ChunkSize               (Uint32, Big Endian)
+48      4     TotalChunks             (Uint32, Big Endian)
+52      8     FileSize                (Uint48, Big Endian, 最大 256TB)
+60      N     FileName                (UTF-8, 可变长)
 ```
 
-### `pkg/pool` — 并发控制
+### `pool` — 并发控制
 
 ```
 Pool
 ├── sem chan struct{}       // 缓冲 channel 作为信号量
-├── wg  sync.WaitGroup
-├── ctx context.Context
+├── wg  sync.WaitGroup      // Go / Promise.all (JS)
 │
 ├── New(maxConcurrency, maxRetries)
 ├── Add(task func(ctx) error)
@@ -203,7 +216,7 @@ Pool
 - 重试策略: 指数退避 (1s → 2s → 4s)
 - 错误收集: 静默断路器模式
 
-### `pkg/store` — 存储适配层
+### `store` — 存储适配层
 
 ```
 Provider (interface)
@@ -211,39 +224,22 @@ Provider (interface)
 ├── GetChunk(ctx, chunkID, range?) ([]byte, error)
 ├── DeleteFile(ctx, fileID) error
 └── GetChunkURL(chunkID) string
-
-实现:
-├── MemoryProvider    // 内存 map (测试用)
-├── LocalFileProvider // 本地文件系统
-└── HTTPProvider      // HTTP PUT/GET + Range
 ```
 
----
-
-## 05. 安全设计
-
-### 内存安全
-- 密钥使用后通过 `secureZero()` 物理清零
-- `PhantomCipher.Destroy()` 清零所有敏感字段
-- Go GC 不保证立即回收，但显式清零消除残留风险
-
-### 防时序攻击
-- `compareFingerprint()` 使用常量时间比较
-- 所有分支路径不依赖密钥内容
-
-### 防重放攻击
-- 每个分片使用唯一 IV（baseIV XOR chunkIndex）
-- AAD 绑定分片索引，防止分片重排
-
-### 防篡改
-- AES-256-GCM 认证加密，篡改即解密失败
-- IV 验证：解密时校验 nonce 是否与推导一致
+| 实现 | 端 | 存储位置 | 适用场景 |
+|------|----|----------|----------|
+| `MemoryProvider` | Go/JS | 进程内存 | 开发调试 |
+| `LocalFileProvider` | Go/JS | 本地文件系统 | 桌面端默认 |
+| `HTTPProvider` | Go/JS | 远程 HTTP 服务器 | 自定义后端 |
+| `S3Provider` | JS | AWS S3 / 兼容 API | 生产环境 |
+| `WebDAVProvider` | JS | WebDAV 服务器 | NAS / Nextcloud |
+| `FileSystemProvider` | JS | OPFS (浏览器) | 浏览器本地存储 |
 
 ---
 
-## 06. BYOS Session 文件夹结构 (V13)
+## 05. BYOS Session 文件夹结构
 
-### 6.1 设计哲学
+### 设计哲学
 
 ```
 你只需要提供网盘，我们提供加密引擎。
@@ -256,12 +252,13 @@ CLI 端加密输出为 Session 文件夹，天然实现"头身分离"：
 my_export/The.Matrix.1080p_phantom/
 ├── blueprint.ptm          (头文件：藏宝图，可单独抽走)
 └── chunks/                (身体：纯碎沙子)
-    ├── 00000000.chk
-    ├── 00000001.chk
-    └── ...
+    ├── {fileId}/
+    │   ├── 00000000.chk
+    │   ├── 00000001.chk
+    │   └── ...
 ```
 
-### 6.2 物理隔离工作流
+### 物理隔离工作流
 
 ```
 加密:
@@ -274,33 +271,26 @@ my_export/The.Matrix.1080p_phantom/
   phantom decrypt blueprint.ptm → 自动定位 chunks/ → 解密还原
 ```
 
-### 6.3 自动路径推断
+---
 
-`cmdDecrypt` 自动检测 `.ptm` 文件所在目录是否包含 `chunks/` 子目录：
+## 06. 安全设计
 
-```go
-// 如果 blueprint.ptm 在 Session 目录中，chunks/ 自动定位到同级
-if strings.HasSuffix(ptmDir, "_phantom") {
-    storeDir = filepath.Join(ptmDir, "chunks")
-}
-```
+### 内存安全
+- 密钥使用后通过 `secureZero()` 物理清零
+- `PhantomCipher.Destroy()` 清零所有敏感字段
+- JS 端 `withSecureKey(key, fn)` 自动管理密钥生命周期
 
-### 6.4 Provider 接口
+### 防时序攻击
+- `compareFingerprint()` 使用常量时间比较
+- 所有分支路径不依赖密钥内容
 
-```go
-type Provider interface {
-    PutChunk(ctx context.Context, chunkID string, data []byte) (string, error)
-    GetChunk(ctx context.Context, chunkID string, rng *Range) ([]byte, error)
-    DeleteFile(ctx context.Context, fileID string) error
-    GetChunkURL(ctx context.Context, chunkID string) (string, error)
-}
-```
+### 防重放攻击
+- 每个分片使用唯一 IV（baseIV XOR BigEndian(chunkIndex)）
+- AAD 绑定分片索引，防止分片重排
 
-| 实现 | 存储位置 | 适用场景 |
-|------|----------|----------|
-| `MemoryProvider` | 进程内存 | 开发调试 |
-| `LocalFileProvider` | 本地文件系统 | 桌面端默认 |
-| `HTTPProvider` | 远程 HTTP 服务器 | 与 WEB 端共享存储 |
+### 防篡改
+- AES-256-GCM 认证加密，篡改即解密失败
+- 指纹验证：解密时校验密钥指纹是否与 Manifest 一致
 
 ---
 
@@ -311,9 +301,9 @@ Phantom-CLI (Go) 与 Phantom-Web (JS) 共享同一套密码学协议：
 | 参数 | Go 实现 | JS 实现 |
 |------|---------|---------|
 | 密钥派生 | `pbkdf2.Key(password, salt, 600000, 32, sha256.New)` | `PBKDF2(password, salt, 600000, 32, SHA-256)` |
-| IV 推导 | `BigEndian.PutUint32(iv[8:12], last4^chunkIndex)` | `DataView.setUint32(8, last4 ^ chunkIndex, false)` |
+| IV 推导 | `binary.BigEndian.PutUint32(iv[8:12], last4^chunkIndex)` | `DataView.setUint32(8, last4 ^ chunkIndex, false)` |
 | AAD | `fmt.Sprintf("chunk_%d", index)` | `new TextEncoder().encode("chunk_"+index)` |
 | 指纹 | `sha256.Sum256(key)[:16]` | `SHA-256(key).then(h => h.slice(0,16))` |
-| .ptm 头 | `binary.LittleEndian.PutUint32` | `DataView.setUint32(offset, value, true)` |
+| .ptm 头 | `binary.BigEndian.PutUint32` | `DataView.setUint32(offset, value, false)` |
 
 **保证：相同 password + salt + baseIV + chunkIndex → 完全相同密文。**
