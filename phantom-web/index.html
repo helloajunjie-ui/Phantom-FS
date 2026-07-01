@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN" style="overflow-x:hidden">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="Phantom-FS - 零信任无服务器流式加密系统">
+    <meta name="theme-color" content="#121212" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="format-detection" content="telephone=no">
+    
+    <title>Phantom-FS V13</title>
+    
+    <!-- QR Code 编解码库 -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    
+    <!-- EmailJS (邮箱发送) -->
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+    
+    <!-- 样式 -->
+    <link rel="stylesheet" href="src/ui/styles/phantom.css">
+    
+    <style>
+        .app-container { opacity: 0; }
+        .app-container.ready { opacity: 1; transition: opacity 0.3s ease; }
+    </style>
+</head>
+<body>
+    <div class="app-container" id="app">
+        
+        <!-- ========== 头部 ========== -->
+        <header class="app-header">
+            <div class="app-logo">Phantom-<span class="accent">FS</span></div>
+            <div class="app-subtitle">零信任加密引擎 · V13</div>
+        </header>
+        
+        <!-- ========== 加密区域 ========== -->
+        <section id="encrypt-section">
+            <div class="card">
+                <div class="card-title">选择文件</div>
+                
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-zone-icon"></div>
+                    <div class="drop-zone-text">拖拽文件到此处，或点击选择</div>
+                    <div class="drop-zone-hint">任意文件格式 · 无大小限制</div>
+                    <input type="file" id="file-input">
+                </div>
+                
+                <div class="file-info hidden" id="file-info">
+                    <div class="file-info-icon"></div>
+                    <div class="file-info-details">
+                        <div class="file-info-name"></div>
+                        <div class="file-info-size"></div>
+                    </div>
+                    <button class="file-info-remove" id="file-info-remove" type="button">&times;</button>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">加密密码</div>
+                
+                <div class="password-input-group">
+                    <input type="password" class="password-input" id="encrypt-password"
+                           placeholder="输入加密密码（至少 4 位）" minlength="4" autocomplete="new-password">
+                    <button class="password-toggle" id="encrypt-password-toggle" type="button">&#9679;</button>
+                </div>
+                <div class="password-strength">
+                    <div class="password-strength-bar" id="encrypt-strength-bar"></div>
+                </div>
+                
+                <button class="btn btn-primary mt-24" id="encrypt-btn" disabled>
+                    加密并上传
+                </button>
+                
+                <div class="progress-container hidden" id="encrypt-progress">
+                    <div class="progress-header">
+                        <span class="progress-label">加密进度</span>
+                        <span class="progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-status">准备中...</div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- ========== 解密区域 ========== -->
+        <section id="decrypt-section" class="hidden">
+            <div class="card">
+                <div class="card-title">上传图纸</div>
+                
+                <div class="scan-zone" id="scan-zone">
+                    <div class="scan-zone-icon"></div>
+                    <div class="scan-zone-text">点击上传 .ptm 图纸文件</div>
+                    <div class="drop-zone-hint mt-16">支持 .ptm 二进制或 .json 格式 · 也可扫码</div>
+                    <input type="file" id="manifest-input" accept=".ptm,.json,.manifest">
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">解密密码</div>
+                
+                <div class="password-input-group">
+                    <input type="password" class="password-input" id="decrypt-password"
+                           placeholder="输入加密时的密码" autocomplete="off">
+                    <button class="password-toggle" id="decrypt-password-toggle" type="button">&#9679;</button>
+                </div>
+                <div class="password-strength">
+                    <div class="password-strength-bar" id="decrypt-strength-bar"></div>
+                </div>
+                
+                <button class="btn btn-primary mt-24" id="decrypt-btn" disabled>
+                    解密并下载
+                </button>
+                
+                <div class="progress-container hidden" id="decrypt-progress">
+                    <div class="progress-header">
+                        <span class="progress-label">解密进度</span>
+                        <span class="progress-percent">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-status">准备中...</div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- ========== 错误提示 ========== -->
+        <div class="error-message hidden" id="error-container">
+            <div class="error-message-icon"></div>
+            <span class="error-message-text"></span>
+        </div>
+        
+        <!-- ========== 结果展示 ========== -->
+        <section id="result-section" class="hidden">
+            <div class="card">
+                <div class="card-title">冷钱包 QR Code</div>
+                
+                <div class="qr-container">
+                    <img class="qr-image" id="qr-image" alt="Phantom-FS Cold Wallet QR Code">
+                    <div class="qr-hint">
+                        将此二维码打印成纸质版保存到保险箱<br>
+                        解密时扫码即可恢复图纸
+                    </div>
+                    <div class="qr-actions">
+                        <button class="btn btn-secondary" id="download-btn">
+                            下载 .ptm 图纸
+                        </button>
+                        <button class="btn btn-secondary" id="email-btn">
+                            发送到邮箱
+                        </button>
+                        <button class="btn btn-secondary" id="save-qr-btn">
+                            保存 QR Code
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="card-title">图纸内容</div>
+                <div class="manifest-viewer" id="manifest-viewer"></div>
+            </div>
+            
+            <div class="card text-center">
+                <button class="btn btn-secondary" id="new-file-btn">
+                    加密新文件
+                </button>
+            </div>
+        </section>
+
+        <!-- ========== 邮箱发送弹窗 ========== -->
+        <div class="modal-overlay hidden" id="email-modal">
+            <div class="modal-card">
+                <div class="modal-title">发送 .phantom 到邮箱</div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label">收件人邮箱</label>
+                        <input type="email" class="form-input" id="email-recipient"
+                               placeholder="customer@example.com">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">备注（可选）</label>
+                        <input type="text" class="form-input" id="email-note"
+                               placeholder="Project X 加密文件">
+                    </div>
+                    <div class="email-status" id="email-status"></div>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" id="email-cancel-btn">取消</button>
+                    <button class="btn btn-primary" id="email-send-btn">发送</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ========== 设置面板（底部折叠） ========== -->
+        <div class="settings-section">
+            <button class="settings-toggle" id="settings-toggle">存储设置</button>
+            <div class="settings-body" id="settings-body">
+                
+                <!-- Provider 配置 -->
+                <div class="card" id="provider-panel">
+                    <div class="card-title">
+                        存储后端
+                        <span class="card-badge">BYOS</span>
+                    </div>
+                    <div class="provider-selector">
+                        <select class="form-select" id="provider-select">
+                            <option value="memory">Memory (开发调试)</option>
+                            <option value="opfs">OPFS (浏览器沙盒)</option>
+                            <option value="local">Local (本地目录)</option>
+                            <option value="s3">S3 兼容 (AWS/OSS/MinIO)</option>
+                            <option value="webdav">WebDAV (Nextcloud/Synology)</option>
+                            <option value="http">HTTP (Range Request)</option>
+                        </select>
+                    </div>
+                    <div class="provider-config hidden" id="provider-config">
+                        <div class="provider-fields" id="provider-fields"></div>
+                        <button class="btn btn-secondary btn-sm mt-12" id="provider-save-btn">
+                            连接存储
+                        </button>
+                        <div class="provider-status" id="provider-status"></div>
+                    </div>
+                </div>
+                
+                <!-- Credential Vault -->
+                <div class="card" id="vault-panel">
+                    <div class="card-title">
+                        凭证保险箱
+                        <span class="card-badge">本地加密</span>
+                    </div>
+                    <div class="vault-description">
+                        API 密钥使用 AES-GCM 加密后存储在本地浏览器，永不上传服务器。
+                        会话超时后自动清除。
+                    </div>
+                    <div class="vault-input-group">
+                        <input type="password" class="form-input" id="vault-password"
+                               placeholder="输入主密码解锁保险箱">
+                        <button class="btn btn-secondary btn-sm" id="vault-unlock-btn">
+                            解锁
+                        </button>
+                        <button class="btn btn-secondary btn-sm hidden" id="vault-lock-btn">
+                            锁定
+                        </button>
+                    </div>
+                    <div class="vault-status" id="vault-status"></div>
+                    <div class="vault-timer" id="vault-timer"></div>
+                </div>
+                
+            </div>
+        </div>
+        
+        <!-- ========== Footer ========== -->
+        <footer class="app-footer">
+            <p>Phantom-FS <span class="footer-version">V13</span> &middot; BYOS 青羽引擎</p>
+            <p class="footer-tagline">零信任 &middot; 自带存储 &middot; 军工级隐私</p>
+        </footer>
+        
+    </div>
+    
+    <!-- ========== 主应用脚本 ========== -->
+    <script type="module" src="src/ui/app.js"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('app').classList.add('ready');
+        });
+
+        // EmailJS 初始化（用户需替换为自己的 Public Key）
+        // 注册地址: https://www.emailjs.com/
+        emailjs.init('YOUR_PUBLIC_KEY');
+    </script>
+</body>
+</html>
